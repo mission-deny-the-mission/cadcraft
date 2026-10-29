@@ -77,6 +77,8 @@ fn backend_flags_are_checked_before_anything_runs() {
     usage(&["store-list", "--store", "webdav"]);
     usage(&["store-list", "--store", "s3", "--store-root", "x"]);
     usage(&["store-list", "--store-root", "x", "--store-url", "http://127.0.0.1/dav/"]);
+    // A URL is WebDAV's: naming the local backend with it is a usage error, not a runtime one.
+    usage(&["store-list", "--store", "local", "--store-url", "http://127.0.0.1/dav/"]);
     usage(&["store-list", "--store", "webdav", "--store-url", "http://127.0.0.1/dav/", "--store-user", "u"]);
     let err = usage(&[
         "store-list",
@@ -102,4 +104,13 @@ fn webdav_refuses_https_and_cleartext_credentials_off_loopback() {
     let (code, _, err) = invoke(&["store-list", "--store", "webdav", "--store-url", "http://192.0.2.1:9/dav/", "--store-token", "t"]);
     assert_eq!(code, 1);
     assert!(err.contains("--store-insecure-http"), "{err}");
+}
+
+#[test]
+fn a_store_url_alone_selects_webdav() {
+    // Nothing listens on port 9 (discard), so this reaches the backend and fails there: a
+    // runtime error (exit 1) from WebDAV, not a usage error and not "--store local needs ...".
+    let (code, out, err) = invoke(&["store-list", "--store-url", "http://127.0.0.1:9/dav/"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(!err.contains("--store-root"), "{err}");
 }

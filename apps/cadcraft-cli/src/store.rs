@@ -14,10 +14,9 @@ use super::error::Result;
 use super::output::{Streams, write_atomic};
 
 /// Which backend the `--store*` flags name.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum StoreKind {
     /// A folder on disk (a NAS mount or a synced folder too), at --store-root
-    #[default]
     Local,
     /// A WebDAV collection (Nextcloud, ownCloud, oCIS), at --store-url
     Webdav,
@@ -28,12 +27,12 @@ pub(crate) enum StoreKind {
 #[derive(Args, Debug)]
 #[command(next_help_heading = "Storage")]
 pub(crate) struct StoreArgs {
-    /// The backend
-    #[arg(long = "store", value_name = "KIND", value_enum, default_value_t)]
-    pub(crate) kind: StoreKind,
+    /// The backend [default: webdav with --store-url, else local]
+    #[arg(long = "store", value_name = "KIND", value_enum)]
+    pub(crate) kind: Option<StoreKind>,
     /// The folder (--store local)
-    // `required_if_eq` only sees a typed `--store local`, not the default, so the folder is also
-    // required whenever no URL names a WebDAV collection.
+    // Required unless a URL picks WebDAV. A typed `--store local` with a URL is a usage error
+    // (the folder is then required, and it conflicts with the URL).
     #[arg(long, value_name = "DIR", required_if_eq("kind", "local"), required_unless_present = "store_url", conflicts_with = "store_url")]
     pub(crate) store_root: Option<PathBuf>,
     /// The collection URL, e.g. http://localhost:9200/dav/spaces/<id>/ (--store webdav)
@@ -55,9 +54,14 @@ pub(crate) struct StoreArgs {
 }
 
 impl StoreArgs {
+    /// The backend kind: as given, else WebDAV when a URL names one, else a local folder.
+    pub(crate) fn kind(&self) -> StoreKind {
+        self.kind.unwrap_or(if self.store_url.is_some() { StoreKind::Webdav } else { StoreKind::Local })
+    }
+
     /// Open the backend the flags name.
     pub(crate) fn open(&self) -> Result<Box<dyn StorageBackend>> {
-        match self.kind {
+        match self.kind() {
             StoreKind::Local => {
                 let root = self.store_root.as_deref().ok_or(StoreError::Missing("--store local needs --store-root DIR"))?;
                 Ok(Box::new(LocalBackend::open(root).map_err(StoreError::Backend)?))
@@ -197,8 +201,9 @@ pub(crate) fn store_remove(a: &StoreRemoveArgs, io: &mut Streams) -> Result {
 
 pub(crate) fn store_probe(a: &StoreProbeArgs, io: &mut Streams) -> Result {
     let store = a.store.open()?;
-    let caps = store.capabilities();
     let probe = store.probe().map_err(StoreError::Backend)?;
+    // What the server said, not what the backend assumed before asking.
+    let caps = &probe.capabilities;
     io.json(
         &json!({
             "atomicWrite": caps.atomic_write, "conditionalWrite": caps.conditional_write, "list": caps.list,
